@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YodlSheets</title>
+<style>
+* { box-sizing: border-box; margin:0; padding:0; font-family: sans-serif;}
+body { background-color:#000; color:#00b7ef; display:flex; flex-direction:column; height:100vh; overflow:hidden;}
+
+.toolbar { display:flex; padding:5px; background:#111; gap:5px; align-items:center;}
+.toolbar button, .toolbar select, .toolbar input { background:#000; color:#00b7ef; border:1px solid #00b7ef; padding:3px 5px; cursor:pointer;}
+.toolbar button:hover, .toolbar select:hover, .toolbar input:hover { background:#00b7ef; color:#000;}
+#formula-bar { flex:1; margin-left:5px;}
+
+.file-tabs, .sheet-tabs { display:flex; background:#111; padding:2px; gap:2px;}
+.file-tab, .sheet-tab { padding:5px 10px; cursor:pointer; border:1px solid #00b7ef; border-bottom:none; background:#000; color:#00b7ef;}
+.file-tab.active, .sheet-tab.active { background:#00b7ef; color:#000;}
+
+.sheet-container { flex:1; display:flex; overflow:auto; position:relative;}
+table { border-collapse:collapse; }
+th, td { border:1px solid #00b7ef; min-width:80px; height:24px; padding:2px 4px; text-align:left; color:#00b7ef; background:#000;}
+th { background:#111; position:sticky; top:0; z-index:2;}
+th.row-header { position:sticky; left:0; z-index:1;}
+td.selected { outline:2px solid #00b7ef; }
+</style>
+</head>
+<body>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <button onclick="newFile()">New File</button>
+  <button onclick="downloadFile()">Download File</button>
+  <input type="file" id="upload-file" onchange="uploadFile(event)">
+  <button onclick="newSheet()">New Sheet</button>
+  <button onclick="downloadCSV()">Download CSV</button>
+  <input type="text" id="formula-bar" placeholder="Formula (e.g., =A1+B2)">
+</div>
+
+<!-- File tabs -->
+<div class="file-tabs" id="file-tabs"></div>
+
+<!-- Sheet tabs -->
+<div class="sheet-tabs" id="sheet-tabs"></div>
+
+<!-- Sheet container -->
+<div class="sheet-container" id="sheet-container"></div>
+
+<script>
+const ROWS=20, COLS=10;
+
+let files = [];
+let activeFile = 0;
+let activeSheet = 0;
+
+// Create new file
+function newFile(name='Untitled'){
+  const file = {name, sheets:[createSheet('Sheet1')]};
+  files.push(file);
+  activeFile = files.length-1;
+  activeSheet = 0;
+  renderFileTabs();
+  renderSheetTabs();
+  renderSheet();
+}
+
+// Create new sheet
+function createSheet(name='Sheet') {
+  let cells=[];
+  for(let r=0;r<ROWS;r++){cells[r]=[]; for(let c=0;c<COLS;c++){cells[r][c]={value:'',formula:'',style:{}};}}
+  return {name, cells};
+}
+
+function newSheet(){
+  const file = files[activeFile];
+  const sheetName = 'Sheet'+(file.sheets.length+1);
+  file.sheets.push(createSheet(sheetName));
+  activeSheet = file.sheets.length-1;
+  renderSheetTabs();
+  renderSheet();
+}
+
+// Initial file
+newFile();
+
+// Render file tabs
+function renderFileTabs(){
+  const tabsDiv=document.getElementById('file-tabs');
+  tabsDiv.innerHTML='';
+  files.forEach((f,i)=>{
+    const tab=document.createElement('div');
+    tab.className='file-tab'+(i===activeFile?' active':'');
+    tab.innerText=f.name;
+    tab.onclick=()=>{activeFile=i; activeSheet=0; renderFileTabs(); renderSheetTabs(); renderSheet();};
+    tabsDiv.appendChild(tab);
+  });
+}
+
+// Render sheet tabs
+function renderSheetTabs(){
+  const tabsDiv=document.getElementById('sheet-tabs');
+  tabsDiv.innerHTML='';
+  const sheets=files[activeFile].sheets;
+  sheets.forEach((s,i)=>{
+    const tab=document.createElement('div');
+    tab.className='sheet-tab'+(i===activeSheet?' active':'');
+    tab.innerText=s.name;
+    tab.onclick=()=>{activeSheet=i; renderSheetTabs(); renderSheet();};
+    tabsDiv.appendChild(tab);
+  });
+}
+
+// Render sheet grid
+function renderSheet(){
+  const container=document.getElementById('sheet-container');
+  container.innerHTML='';
+  const table=document.createElement('table');
+  const sheets=files[activeFile].sheets;
+  const sheet=sheets[activeSheet];
+
+  const headerRow=document.createElement('tr');
+  headerRow.appendChild(document.createElement('th'));
+  for(let c=0;c<COLS;c++){const th=document.createElement('th'); th.innerText=String.fromCharCode(65+c); headerRow.appendChild(th);}
+  table.appendChild(headerRow);
+
+  for(let r=0;r<ROWS;r++){
+    const tr=document.createElement('tr');
+    const rowHeader=document.createElement('th');
+    rowHeader.className='row-header';
+    rowHeader.innerText=r+1;
+    tr.appendChild(rowHeader);
+    for(let c=0;c<COLS;c++){
+      const td=document.createElement('td');
+      td.contentEditable=true;
+      td.dataset.row=r;
+      td.dataset.col=c;
+      td.innerText=sheet.cells[r][c].value;
+      td.onclick=()=>{selectCell(td);};
+      td.oninput=()=>{updateCell(r,c,td.innerText);};
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+  container.appendChild(table);
+}
+
+// Selected cell
+let selectedCell=null;
+function selectCell(td){
+  if(selectedCell) selectedCell.classList.remove('selected');
+  selectedCell=td;
+  td.classList.add('selected');
+  const {row,col}=td.dataset;
+  const cell=files[activeFile].sheets[activeSheet].cells[row][col];
+  document.getElementById('formula-bar').value=cell.formula||cell.value;
+}
+
+document.getElementById('formula-bar').addEventListener('keydown',(e)=>{
+  if(e.key==='Enter' && selectedCell){
+    const {row,col}=selectedCell.dataset;
+    files[activeFile].sheets[activeSheet].cells[row][col].formula=e.target.value;
+    calculateAll();
+  }
+});
+
+// Formatting
+function formatCell(style){
+  if(!selectedCell) return;
+  const {row,col}=selectedCell.dataset;
+  const cell=files[activeFile].sheets[activeSheet].cells[row][col];
+  if(style==='bold') cell.style.bold=!cell.style.bold;
+  if(style==='italic') cell.style.italic=!cell.style.italic;
+  if(style==='underline') cell.style.underline=!cell.style.underline;
+  applyStyle(selectedCell, cell.style);
+}
+
+function changeFont(font){if(!selectedCell)return; const {row,col}=selectedCell.dataset; files[activeFile].sheets[activeSheet].cells[row][col].style.fontFamily=font; applyStyle(selectedCell, files[activeFile].sheets[activeSheet].cells[row][col].style);}
+function changeTextColor(color){if(!selectedCell)return; const {row,col}=selectedCell.dataset; files[activeFile].sheets[activeSheet].cells[row][col].style.color=color; applyStyle(selectedCell, files[activeFile].sheets[activeSheet].cells[row][col].style);}
+function changeFillColor(color){if(!selectedCell)return; const {row,col}=selectedCell.dataset; files[activeFile].sheets[activeSheet].cells[row][col].style.background=color; applyStyle(selectedCell, files[activeFile].sheets[activeSheet].cells[row][col].style);}
+
+function applyStyle(td, style){td.style.fontWeight=style.bold?'bold':'normal'; td.style.fontStyle=style.italic?'italic':'normal'; td.style.textDecoration=style.underline?'underline':'none'; td.style.fontFamily=style.fontFamily||'sans-serif'; td.style.color=style.color||'#00b7ef'; td.style.background=style.background||'#000';}
+
+function updateCell(r,c,text){ files[activeFile].sheets[activeSheet].cells[r][c].value=text; if(!files[activeFile].sheets[activeSheet].cells[r][c].formula) calculateAll(); }
+function calculateAll(){
+  const sheet=files[activeFile].sheets[activeSheet];
+  for(let r=0;r<ROWS;r++){for(let c=0;c<COLS;c++){
+    const cell=sheet.cells[r][c];
+    if(cell.formula){ try{ cell.value=evaluateFormula(cell.formula);}catch(e){cell.value='#ERROR';}
+  }}}
+  renderSheet();
+}
+
+// Formula parsing
+function evaluateFormula(formula){
+  if(!formula.startsWith('=')) return formula;
+  let expr=formula.substring(1);
+  expr=expr.replace(/[A-Z][0-9]+/g,(match)=>{
+    let col=match.charCodeAt(0)-65;
+    let row=parseInt(match.substring(1))-1;
+    return files[activeFile].sheets[activeSheet].cells[row][col].value||0;
+  });
+  expr=expr.replace(/SUM\(([^)]+)\)/gi,(_,range)=>calculateRange(range,'SUM'));
+  expr=expr.replace(/AVERAGE\(([^)]+)\)/gi,(_,range)=>calculateRange(range,'AVERAGE'));
+  expr=expr.replace(/MIN\(([^)]+)\)/gi,(_,range)=>calculateRange(range,'MIN'));
+  expr=expr.replace(/MAX\(([^)]+)\)/gi,(_,range)=>calculateRange(range,'MAX'));
+  return eval(expr);
+}
+
+function calculateRange(range,type){
+  const parts=range.split(':');
+  const start=parts[0], end=parts[1];
+  const startCol=start.charCodeAt(0)-65, startRow=parseInt(start.substring(1))-1;
+  const endCol=end.charCodeAt(0)-65, endRow=parseInt(end.substring(1))-1;
+  let values=[];
+  for(let r=startRow;r<=endRow;r++){for(let c=startCol;c<=endCol;c++){
+    let val=parseFloat(files[activeFile].sheets[activeSheet].cells[r][c].value)||0; values.push(val);
+  }}
+  if(type==='SUM') return values.reduce((a,b)=>a+b,0);
+  if(type==='AVERAGE') return values.reduce((a,b)=>a+b,0)/values.length;
+  if(type==='MIN') return Math.min(...values);
+  if(type==='MAX') return Math.max(...values);
+  return 0;
+}
+
+// CSV Download (current sheet)
+function downloadCSV(){
+  let csv='';
+  const sheet=files[activeFile].sheets[activeSheet].cells;
+  for(let r=0;r<ROWS;r++){
+    csv+=sheet[r].map(c=>`"${c.value}"`).join(',')+'\n';
+  }
+  const blob=new Blob([csv],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=files[activeFile].sheets[activeSheet].name+'.csv';
+  a.click();
+}
+
+// Download current file as JSON
+function downloadFile(){
+  const data=JSON.stringify(files[activeFile]);
+  const blob=new Blob([data],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=files[activeFile].name+'.json';
+  a.click();
+}
+
+// Upload file
+function uploadFile(event){
+  const file=event.target.files[0];
+  const reader=new FileReader();
+  reader.onload=(e)=>{
+    const data=JSON.parse(e.target.result);
+    files.push(data);
+    activeFile=files.length-1;
+    activeSheet=0;
+    renderFileTabs();
+    renderSheetTabs();
+    renderSheet();
+  };
+  reader.readAsText(file);
+}
+</script>
+
+</body>
+</html>
